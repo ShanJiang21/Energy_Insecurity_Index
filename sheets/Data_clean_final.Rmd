@@ -1,0 +1,317 @@
+---
+title: "EI data clean code"
+author: "Shan"
+date: "4/19/2019"
+output: html_document
+---
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+require(cowplot)
+library(tableone)
+library(ltm)
+library(psych)
+library(lavaan)
+library(expss)
+```
+
+```{r}
+## read in data of energy questionaire 
+energy.raw = read.csv(file = "./raw_jan.csv",head = TRUE, sep = ",")
+```
+
+## Group data by household size: 2 indictors (Children and The elderly)
+
+```{r}
+## No missing value for size of household,
+## here is the left-skewed distribution 
+sum(is.na(energy.raw$HH1))
+table(energy.raw$HH1)
+
+## Children: denoted by child 
+energy.raw = energy.raw %>% 
+  mutate(child = if_else( HH23r1 == 0, true = 0, false = 1)) 
+
+## Elderly: denoted by eld 
+energy.raw = energy.raw %>% 
+  mutate(eld = if_else( HH23r3 == 0, true = 0, false = 1))   
+```
+
+## Econ burden part: mean imputation 
+
+(1) winter and summer bills 
+
+```{r}
+## For 4 energy in house: conditioned on pay for electricity 
+
+energy.raw$ESC1ar1[(energy.raw$ESC1r1) == 0 ] <- 0
+
+# 0    1 
+# 549 1795 
+
+##### Imputation of winter/summer bills for electricity #####
+
+energy.raw$ESC1br1c1[is.na(energy.raw$ESC1br1c1)] <- mean(energy.raw$ESC1br1c1, na.rm = TRUE)
+energy.raw$ESC1cr1c1[is.na(energy.raw$ESC1cr1c1)] <- mean(energy.raw$ESC1cr1c1, na.rm = TRUE)
+
+##### Categorize to dichotomous variable by using mean as cut-off point 
+energy.raw$ESC1br1c1 <- cut(energy.raw$ESC1br1c1,
+                     breaks=c(-Inf, 127, Inf),
+                     labels=c("low","high"))
+
+energy.raw$ESC1cr1c1 <- cut(energy.raw$ESC1cr1c1,
+                     breaks = c(-Inf, 140, Inf),
+                     labels = c("low","high"))
+
+## Define the variables (For model Rasch)
+
+energy.raw = energy.raw %>% 
+  mutate(ESC1br1c1 = as.numeric(ESC1br1c1)) %>% 
+  mutate(ESC1cr1c1 = as.numeric(ESC1cr1c1))
+
+
+
+```
+
+(2) Pay out-of-pocket rate
+
+```{r}
+## ESC1ar5: Pay for None of 4 sources
+## --> Transformation: Yes = 0, None = 1. 
+#impute by adding up subjects use other resources 
+table(energy.raw$ESC1ar5)
+# use mode for imputation
+energy.raw$ESC1ar5[is.na(energy.raw$ESC1ar5)] <- 0
+# 0    1         0     1 
+# 2139  179     2226  179
+
+# Electricity    Gas     Don't know   others
+# 1937           1236    39           39
+```
+
+### (3) Pay for Electricity and gas 
+
+```{r}
+energy.raw$ESC1ar1[is.na(energy.raw$ESC1ar1)] <- 0
+#  0    1 
+# 468 1937 
+
+energy.raw$ESC1ar2[is.na(energy.raw$ESC1ar2)] <- 0
+#  0    1 
+# 1169 1236  
+```
+
+
+```{r}
+## Energy Burden: recode for severity and same direction of EI scale
+energy.raw = energy.raw %>% 
+         mutate(ESC2 = if_else(ESC2 == "2" ,  0, 1 ),
+                EB2a = if_else(EB2a == "2",  0, 1), 
+                EB2b = if_else(EB2b == "2",  0, 1), 
+                EB4 = if_else(EB4 == "2",  0, 1)) # 2 is yes, received help, so should be lower
+        
+## Pay for water
+#  1    2 
+# 1410  995 
+```
+
+```{r}
+## Disconnection notice: imputation 
+energy.raw = energy.raw %>%
+    mutate(EB5r1 = if_else(EB5r1 == 1,  0, 1 )) %>%  # 313 missing value 
+    mutate(EB6r1 = if_else(EB6r1 == 1 , 0, 1 )) ##((2, 3, 4) = 1, has a higher EI.
+
+table(energy.raw$EB5r1)
+```
+
+```{r}
+## additional steps 
+energy.raw = energy.raw %>%
+    mutate(EB7a = if_else(EB7a == "2" ,  0, 1 )) %>%  # 313 missing value, # gas shut-off
+    mutate(EB7b = if_else(EB7b == "2", 0, 1 )) %>% 
+    mutate(EB7d = if_else(EB7d == "2", 0, 1 )) %>% 
+    mutate(EB8d = if_else(EB8d == "2", 0, 1 )) %>% 
+    mutate(EB8a = if_else(EB8a == "2", 0, 1 )) %>% 
+    mutate(EB8b = if_else(EB8b == "2", 0, 1 )) 
+
+## Strong association between the shut-off plan: concentration  
+table(energy.raw$EB7a)
+table(energy.raw$EB7b, energy.raw$EB7d)
+
+```
+
+## Housing efficiency 
+
+```{r}
+## Housing satisfaction to 2 levels : 0-1: 1 = very unsatisfied
+energy.raw = energy.raw %>%
+    mutate(HEC1r1a = if_else(HEC1r1a %in% c(1, 2), 1, 0 )) %>%  # 313 missing value, # gas shut-off
+    mutate(HEC1r1b = if_else(HEC1r1b %in% c(1, 2), 1, 0 )) %>% 
+    mutate(HEC1r1c = if_else(HEC1r1c %in% c(1, 2), 1, 0 )) %>% 
+    mutate(HEC1r1d = if_else(HEC1r1d %in% c(1, 2), 1, 0 )) %>% 
+    mutate(HEC2r10 = if_else(HEC2r10 %in% c(1, 2), 1, 0 )) ## HEC2r10: Repair need Yes = 1, 
+
+table(energy.raw$HEC1r1a)
+
+```
+
+
+## Efficiency 
+
+```{r}
+## data manipulation for continuous variable 
+energy.raw = energy.raw %>% 
+    filter(HEC5 != 8) %>% 
+    filter(HEC6 != 8)
+
+nrow(energy.raw)
+# 2344 after filter the missing of HEC5 and HEC6: don't know 
+
+# Efficiency subjective well-being 	
+energy.raw = energy.raw %>%
+    mutate(HEC5 = if_else(HEC5 %in% c(1, 2, 6, 7), 1, 0 )) %>%  
+    mutate(HEC6 = if_else(HEC6 %in% c(1, 2, 6, 7), 1, 0 )) 
+                      
+
+## Efficiency: Lighting to Plumbing 
+energy.raw = energy.raw %>%
+  mutate(HEC3r3a = if_else(HEC3r3a %in% c(1, 2), 1, 0 )) %>%  
+  mutate(HEC3r3b = if_else(HEC3r3b %in% c(1, 2), 1, 0 )) %>% 
+  mutate(HEC3r3c = if_else(HEC3r3c %in% c(1, 2), 1, 0 )) %>% 
+  mutate(HEC3r3d = if_else(HEC3r3d %in% c(1, 2), 1, 0 )) %>% 
+  mutate(HEC3r3e = if_else(HEC3r3e %in% c(1, 2), 1, 0 )) %>% 
+  mutate(HEC3r3f = if_else(HEC3r3f %in% c(1, 2), 1, 0 )) %>% 
+  mutate(HEC3r3g = if_else(HEC3r3g %in% c(1, 2), 1, 0 )) %>% 
+  mutate(HEC3r3h = if_else(HEC3r3h %in% c(1, 2), 1, 0 )) 
+
+table(energy.raw$HEC3r3a)
+
+
+# Temprature manipulation 
+energy.raw = energy.raw %>%
+   mutate(HEC4a = if_else(HEC4a == "2" ,  0, 1 )) %>%
+   mutate(HEC4b = if_else(HEC4b == "2" ,  0, 1 )) %>% 
+   mutate(HEC5a = if_else(HEC5a == "2" ,  0, 1 )) %>% 
+   mutate(HEC6a = if_else(HEC6a == "2" ,  0, 1 )) 
+  
+```
+
+
+```{r}
+## Coping strategy 
+energy.raw = energy.raw %>%
+   mutate(CEP1 = if_else(CEP1 == "2" ,  0, 1 )) %>%
+   mutate(CEP2 = if_else(CEP2 == "2" ,  0, 1 )) %>% 
+   mutate(CEP3 = if_else(CEP3 == "2" ,  0, 1 )) %>% 
+   mutate(CEP4 = if_else(CEP4 == "2" ,  0, 1 )) %>% 
+   mutate(CEP5 = if_else(CEP5 == "2" ,  0, 1 )) %>% 
+   mutate(CEP6 = if_else(CEP6 == "2" ,  0, 1 )) %>%
+   mutate(CEP7 = if_else(CEP7 == "2" ,  0, 1 ))
+  
+## No need to recode: CEP8r1
+table(energy.raw$CEP8r1)
+```
+
+
+```{r}
+## Energy literacy 
+energy.raw = energy.raw %>%
+   mutate(EL1 = if_else(EL1 %in% c(1, 3, 4), 1, 0)) %>%
+   mutate(EL2 = if_else(EL2 %in% c(1, 2, 4), 1, 0)) %>%
+   mutate(EL3 = if_else(EL3 %in% c(1, 3, 4), 1, 0)) 
+
+```
+
+## part II: handling the missing value 
+
+
+```{r quietly = TRUE, warn.conflicts = FALSE}
+
+## transform bills variables 
+energy.raw = energy.raw %>%
+  mutate(wbill = if_else(ESC1br1c1 == "2", 0, 1)) %>% 
+  mutate(sbill = if_else(ESC1cr1c1 == "2", 0, 1)) %>% 
+  dplyr::select(-c(ESC1cr1c1, ESC1br1c1)) 
+
+## Select core variables 
+EI_df =  energy.raw  %>% 
+  dplyr::select(rnid,
+        HHI, HH23r1, HH23r3, ## household size 
+        ESC1r1, ESC1r2, ESC1r3, ESC1r4, ## Energy Insecurity Scale 
+        ESC1ar1,ESC1ar2, ESC1ar3,ESC1ar4,ESC1ar5,ESC1ar4,wbill, sbill,
+        ESC2, EB2a, EB2b,EB4,
+        EB5r1,EB6r1,EB7a, EB7b, EB7d, EB8a, EB8b, EB8d,
+        HEC1r1a, HEC1r1b, HEC1r1c, HEC1r1d, 
+        HEC2r1, HEC2r2,HEC2r3, HEC2r4, HEC2r5, HEC2r6, HEC2r7, HEC2r8, HEC2r9,HEC2r10,
+        HEC3r3a, HEC3r3b, HEC3r3c, HEC3r3d, HEC3r3e, HEC3r3f,HEC3r3g, HEC3r3h,
+        HEC4a,HEC4b, HEC5, HEC5a, HEC6, HEC6a,
+        CEP1, CEP2, CEP3, CEP4, CEP5, CEP6, CEP7,
+        CEP8r1, CEP8r2, CEP8r3, CEP8r4)   
+
+## Keep in storage: write.csv(EI_df, "./recoded_variables_65.csv")
+demo_data = energy.raw  %>% 
+  dplyr::select(
+        rnid, HH1:HH13a,
+        HHI, HH23r1, HH23r3, ## household size 
+        ESC1r1, ESC1r2, ESC1r3, ESC1r4, ## Energy Insecurity Scale 
+        ESC1ar1,ESC1ar2, ESC1ar3,ESC1ar4,ESC1ar5,ESC1ar4,wbill, sbill,
+        ESC2, EB2a, EB2b,EB4,
+        EB5r1,EB6r1,EB7a, EB7b, EB7d, EB8a, EB8b, EB8d,
+        HEC1r1a, HEC1r1b, HEC1r1c, HEC1r1d, 
+        HEC2r1, HEC2r2,HEC2r3, HEC2r4, HEC2r5, HEC2r6, HEC2r7, HEC2r8, HEC2r9,HEC2r10,
+        HEC3r3a, HEC3r3b, HEC3r3c, HEC3r3d, HEC3r3e, HEC3r3f,HEC3r3g, HEC3r3h,
+        HEC4a,HEC4b, HEC5, HEC5a, HEC6, HEC6a,
+        CEP1, CEP2, CEP3, CEP4, CEP5, CEP6, CEP7,
+        CEP8r1, CEP8r2, CEP8r3, CEP8r4) %>% 
+  # na.omit() 
+
+## write.csv(demo_data, "./demo.csv" )
+```
+
+####  Overview of Core Analysis data 
+
+```{r}
+## missing data detection 
+colSums(is.na(EI_df))
+
+```
+
+```{r}
+## We need to omit some variables with high non-respondence rate:65- 11 = 54  
+## EB5r1,EB6r1 should be kept, as they have significant conceptual meaning.
+
+## For construction of Rasch model: dichotomous 
+test_data <- EI_df %>% 
+        dplyr::select(-c(
+           EB7b, EB7d, EB8b, EB8d, EB2b,
+           ESC1ar1, ESC1r1, ESC1r2, ESC1r3, ESC1r4, ESC1ar5)) %>% 
+   na.omit() %>% 
+   mutate_if(is.character, as.numeric) # Transform into numeric variables 
+
+write.csv(test_data, "./index.csv")
+## Inner join
+# a = merge(x = energy.raw , y= test_data,by ="rnid") 
+# write.csv(a, "./score.csv")
+```
+
+####  Overview of Scaled  data 
+```{r}
+## Rasch model requires all data be numeric: 0-1.
+## A simplified Table1
+describe(test_data)
+```
+
+```{r quietly = TRUE, warn.conflicts = FALSE}
+
+
+## NOT keep in dataframe for demographic: HHI, HH23r1, HH23r3
+test_data = test_data %>% 
+  dplyr::select(-c(HH23r1, HH23r3, HHI))
+
+## Only 51 variables in scale_data_set: all in 0-1 scale.
+
+test_data = as.matrix(test_data)
+## write.csv(test_data, "./scaled_df_51.csv")
+
+```
+

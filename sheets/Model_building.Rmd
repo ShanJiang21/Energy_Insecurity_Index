@@ -1,0 +1,318 @@
+---
+title: "Model Fitting and selection"
+author: "Shan"
+date: "05/02/2019"
+output:   
+  pdf_document:
+         latex_engine: xelatex
+fontsize: 12pt
+geometry: margin=1.1in 
+
+---
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tableone)
+library(lavaan)
+library(expss)
+library(mirt)
+```
+
+## Import data 
+```{r}
+## read in data cleaned 
+ei_df = read.csv(file = "./scaled_df_51.csv",head = TRUE, sep = ",")
+head(ei_df)
+nrow(ei_df)
+```
+ 
+
+## Model construction 
+
+```{r}
+library(ltm)
+library(psych)
+```
+
+### Test Statistics
+
+```{r}
+## this command calculates cronbach’s alpha for the whole data set as one factor
+alpha(ei_df, keys=NULL,cumulative=FALSE, title=NULL, max=10,na.rm = TRUE, 
+      check.keys=FALSE, n.iter=1,delete=TRUE,use="pairwise",warnings=TRUE,n.obs=NULL)
+```
+
+HEC4a, HEC4b, HEC2r10, EB5r1, EB6r1, wbill, sbill are negatively correlated, so should be removed from the CTT analysis. 
+
+### (1) Factor Analysis: not valid for binary variables 
+
+Assumption: observed or manifest varibles are *continuous/metrical* rather then binary.
+
+$$x_i = \alpha_{i0} + \alpha_{i1}f_1 + \alpha_{i2}f_2 + \dots + \alpha_{iq}f_q + e_i, i = 1,..., p.$$
+where p denotes the total number of observed items X.
+
+
+#### fitting a factor model 
+```{r}
+library(polycor)
+```
+
+1. recode first it as factor
+```{r}
+df.2 <- sapply(ei_df, as.factor)
+head(df.2)
+```
+
+Once the numeric data have been recoded as factor, we can proceed by loading the ‘polycor’ package
+which contains the ‘hetcor’ function.
+
+```{r}
+het.mat <- hetcor(df.2)$cor
+het.mat 
+```
+
+
+Although there are two warnings listed above, the function does in fact return the appropriate correlation
+matrix. Now we can proceed with the factor analysis using this ‘het.mat’ correlation matrix as the matrix
+of association for the factor analysis.
+
+##### (1) Regression Scores 
+
+1.1 fit the model 
+```{r}
+fa.1 <- factanal(ei_df,  factors = 6, rotation = "varimax", scores = "regression")
+fa.1
+
+head(fa.1$scores)
+nrow(fa.1$scores)
+```
+
+1.1.1 Scree plot for determining the Number of Factors to Extract
+
+```{r}
+library(psy)
+scree.plot(fa.1$correlation)
+
+library(nFactors)
+ev <- eigen(cor(ei_df)) # get eigenvalues
+ap <- parallel(subject = nrow(ei_df),var= ncol(ei_df), rep=100, cent=.05)
+nS <- nScree(x = ev$values, aparallel= ap$eigen$qevpea)
+plotnScree(nS)
+```
+
+Thurstone (1935) used a least squares regression approach to predict factor score(s), here we use this method.
+
+##### (2)  Bartlett Scores 
+
+```{r}
+fa.2 <- factanal(ei_df,  factors = 6, rotation = "varimax", scores = "Bartlett" )
+fa.2
+```
+
+
+### (2) Reduction based on Classical Test Theory (CTT)
+
+
+#### cronbach’s alpha 
+```{r}
+## There are 43 varaibles after deletion 
+Ctt_data = ei_df %>% 
+  dplyr::select(-c(ESC2, EB4, HEC4a, HEC4b, HEC2r10, EB5r1, EB6r1, wbill, sbill, CEP8r4))
+
+```
+
+```{r}
+alpha(Ctt_data, keys=NULL,cumulative=FALSE, title=NULL, max=10,na.rm = TRUE, 
+      check.keys=F, n.iter=1,delete=TRUE,use="pairwise",warnings=TRUE,n.obs=NULL)
+```
+
+The cronbach’s alpha is 0.88.
+
+
+The classical index of discrimination was obtained by calculating the corrected item-total correlation coefficients (r) for each item with its hypothetical scale. 
+
+*Select items that*
+
+* correlate well with each other (.30 --.80)  
+* have similar difficulty (around p=.50) 
+* high discrimination
+
+
+#### Item Difficulty (p)
+
+* How hard is the item? Item Difficulty (p):  % of people who answered correctly
+Mean correct across people is p. 
+
+* Applications: 
+generalised ability test --> usually delete items too easy (p>.9) or too hard (p<.1) for
+A mastery test maximise items that fit the difficulty of the cut score (e.g., p =.35, which means 65% correct)
+
+```{r}
+item_diff <- colMeans(Ctt_data, na.rm= T)
+round(item_diff, 3)
+
+P_df = as.data.frame(round(item_diff, 3))
+P_df = P_df %>% 
+  filter(`round(item_diff, 3)` < 0.9) %>% 
+  filter(`round(item_diff, 3)` > 0.1)
+```
+
+There are 30 items have Item Difficulty (p) between 0.1 and 0.9.
+
+
+#### Item Discrimination rpb
+
+Who gets the item right? --> Item Discrimination: Correlation between each item and the total score without the item in it.
+
+* If the item behaves like the rest of the test the correlation should be positive (i.e., students who do best on the test tend to get each item right more than people who get low total scores)
+
+* Ideally, look for values **> .20**.
+
+* Beware negative or zero discrimination items, otherwise the item might be testing a different construct or else the distractors might be poorly crafted
+
+```{r}
+##first create a total score for each person
+total_score <- rowSums(Ctt_data)
+##correlate each item with the total score
+item_discr <- cor(Ctt_data, total_score)
+##display item discrimination values
+item_discr
+```
+
+```{r}
+describe(total_score)
+# write.csv(total_score, "./ctt_score.csv")
+```
+
+SEM=SD*√(1-reliability) = 6.35 * $\sqrt{1-0.79} = 2.9099$
+Consistency of items >.80, so with this sample this is a good test
+
+* Poor items: HEC2r10 = -0.52649298 (reverse discrimination)
+
+##### Item Trace line 
+
+Bottom right to top left = GOOD
+```{r}
+## 
+x <- mirt(Ctt_data, 1, SE = TRUE)
+## item characteristic curves 
+plot(x, type = 'trace')
+```
+
+
+## (3) Item Response Theory (IRT)
+
+There are other two approches for adjusting the methods, the older one is try to retain the factor analysis as much as possible, while the other one, which is better and widely used is described here: 
+
+$$\pi_{i}(f) = \alpha_{i0} + \alpha_{i1}f_1 + \alpha_{i2}f_2 + \dots + \alpha_{iq}f_q$$
+This one has two flaws:
+*  The left-hand side is the probability that the observed variables take value between 0 and 1;
+*  The right hand side has no restrictions on the region. 
+
+Thus we adopt the factor model using logit link for binary data using IRT model approach.
+
+$$logit\pi_i(f) = log_e \frac{\pi_i(f)}{1-\pi_i(f)} = \alpha_{i0} + \sum_{j=1}^q \alpha_{ij}f_j$$
+
+By transformation: when q = 1, it is the item response model mainly concerned.
+
+The unidimensional latent trait model:
+
+$$\pi_{i}(f_1) =  \frac{exp(\alpha_{i0}+ \alpha_{i1}f_1)}{1 + exp(\alpha_{i0}+ \alpha_{i1}f_1)}$$
+$\pi_{i}(f_1)$ is known as the item characteristic curve or IRF. 
+$\alpha_{i1}$ determines the steepness of the curve over the middle of range. 
+
+IRT called “latent trait theory” – assumes existence of unobserved (latent) trait OR ability which leads to consistent performance. 
+
+Focus at **item** level, not at level of the test.
+
+Calculates parameters as estimates of population characteristics, not sample statistics
+
+
+#### Rasch model 
+
+A special case of unidimensional model is obtatined when all the discrimination parameters are equal ($\alpha_{11} = \alpha_{21} = \dots = \alpha_{p1}$), this model is first discussed by Rasch and it is written as:
+
+$$Pr(x_i = 1 | \alpha_{i0}, \beta_k) = \pi_{ik} =  \frac{exp(\alpha_{i0}+ \beta_k)}{1 + exp(\alpha_{i0}+ \beta_k)}$$
+
+since all alpha are equal, $\alpha_{i1}f_k$ is repalced by $\beta_k$. 
+In education theory, the ability of individual is of interest.
+
+Two advantages: 
+* The total score $\sum_{i=1}^p x_{ik}$ is sufficient for $\beta_k$, that is, it contains all the information;
+* The total number of positive/correct responses for item i, $\sum_{k=1}^n x_{ik}$ is sufficient for $\alpha_{i0}$. 
+
+IN 1PL /Rasch Difficulty is the ONLY parameter
+
+* Identifies which items to reject before score calculation
+
+The more the person’s ability is greater than the item difficulty,
+the more likely the person is to get the item correct.
+
+```{r}
+library(eRm)
+rm.res <- RM(ei_df) 
+rm.res 
+
+## 1 parameter Rasch analysis of dichotomous data file
+model.matrix(rm.res)
+model.matrix(RM(ei_df, sum0 = FALSE))
+summary(rm.res)
+
+
+plotjointICC(rm.res, legend=TRUE, cex=0.75, xlim = c(-5, 5))
+```
+
+```{r}
+## In ltm package
+
+response_matrix = (ei_df) 
+# 1 parameter Rasch analysis of dichotomous data file; Note na.action=null means ignore any item responses coded na for missing values
+
+item_weights <- rasch(response_matrix)
+
+##to create Rasch parameters and test-taker location scores calculate the values for each; note: "resp.patterns = response_matrix" binds the ordering of the students and ensures they're not sorted.
+locations <- ltm::factor.scores(item_weights, resp.patterns = response_matrix)
+
+##to display the discrimination coefficients for each item; these should all be the same in RASCH; (nb negative bad):
+item_weights[1]$coefficients[,2]
+```
+
+#### person scores
+
+calculate person scores based on Rasch item analysis; 
+to get student locations on theta (negative means weak, positive means strong); these values now match the order of cases as input.
+
+
+```{r}
+a = locations$score.dat["z1"]
+write.csv(a, "rasch.csv")
+#obtain Rasch fit statistics and difficulty locations for items
+summary(item_weights)
+
+#generate item responses and logit scores per person; z1 is the person score, se.z1 is the standard error for the score; note items deleted from display
+ltm::factor.scores(item_weights)
+
+```
+
+##### Fit comparison 
+
+Wald test
+```{r}
+wt <- Waldtest(rm.res)
+wt
+```
+
+```{r}
+lr <- LRtest(rm.res, se = T)
+plotGOF(lr, conf = list(), xlim = c(-2, 2), ylim = c(-2, 2))
+plotGOF(lr, ctrline = list(), xlim = c(-1.5, 1.5), ylim = c(-1.5, 1.5))
+```
+
+```{r}
+score = ltm::factor.scores(item_weights)
+
+rasch_df = as.data.frame(score$score.dat$z1)
+
+write.csv(Ctt_data, "ctt.csv")
+```
+

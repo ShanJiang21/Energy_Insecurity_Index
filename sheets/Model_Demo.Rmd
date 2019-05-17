@@ -1,0 +1,82 @@
+---
+title: "Model Fitting and selection"
+author: "Shan"
+date: "4/20/2019"
+output: html_document
+---
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tableone)
+library(ltm)
+library(psych)
+library(lavaan)
+library(expss)
+library(mirt)
+```
+
+## Import data 
+```{r}
+## read in data cleaned 
+demo.df = read.csv(file = "./rasch.csv",head = TRUE, sep = ",")
+describe(demo.df)
+```
+
+Merge datasets 
+```{r}
+score = read.csv(file = "./score.csv",head = TRUE, sep = ",")
+append = readxl::read_xlsx("./data_append.xlsx") %>% 
+  mutate(rnid = RNID  )
+
+af = merge(append, score, by = "rnid" )
+write.csv(af, "./append.csv")
+```
+
+## Describe
+
+```{r}
+demo.df = demo.df %>% 
+  mutate(HHR = as.numeric(HHR)) %>% 
+  mutate(sum_score = as.numeric(sum_score)) %>% 
+  mutate(HH6r2 = as.factor(HH6r2)) %>% 
+  mutate(HH6r3 = as.factor(HH6r3)) %>% 
+  mutate(HH6r1 = as.factor(HH6r1)) %>% 
+  mutate(HH6r4 = as.factor(HH6r4)) %>% 
+  mutate(HH6r5 = as.factor(HH6r5))
+
+mean(demo.df$sum_score, na.rm = T)
+
+HH6r2_score = demo.df %>% 
+  group_by(HHR, HH6r1) %>%
+   summarise(Average_score = mean(sum_score, na.rm = T)) 
+  
+  
+ggplot(HH6r2_score, aes(x = HHR , y = Average_score, fill = HH6r1)) +
+  geom_bar(stat="identity", color="black", position = position_dodge()) +
+  geom_errorbar(aes(ymin= Average_score - 1, ymax = Average_score +1), width =.2,
+                 position=position_dodge(.9)) 
+
+```
+
+```{r}
+HH6r3_score = demo.df %>% 
+  group_by(HHR, HH6r3) %>%
+   summarise(Average_score = mean(sum_score, na.rm = T)) 
+  
+  
+ggplot(HH6r3_score, aes(x = HHR , y = Average_score, fill = HH6r3)) +
+  geom_bar(stat="identity", color="black", position = position_dodge()) +
+  geom_errorbar(aes(ymin= Average_score - 1, ymax = Average_score +1), width =.2,
+                 position=position_dodge(.9)) 
+
+par(mfrow=c(3,2))
+boxplot(demo.df$sum_score, demo.df$HH23r1, main="Boxplot of sum_score among white vs. Non-white")
+boxplot(demo.df$sum_score, demo.df$HH23r2, main="Boxplot of sum_score among Black or African American vs. Non-black")
+boxplot(demo.df$sum_score, demo.df$HH23r3.x, main="Boxplot of sum_score among Indian vs. Non-Native Indians")
+boxplot(demo.df$sum_score, demo.df$HH23r4, main="Boxplot of sum_score among Asian vs. Non-Asian")
+plot(demo.df$sum_score, demo.df$HH23r3, main="Scatterplot of wt vs. mpg")
+hist(demo.df$sum_score,, main="Boxplot of wt")
+
+```
+
+
